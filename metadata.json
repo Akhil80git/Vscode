@@ -1,0 +1,6 @@
+{
+  "name": "VS Code Web & GitHub Studio",
+  "description": "Full-featured web IDE powered by Monaco Editor with GitHub repo cloning, source control, terminal, and command palette.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
