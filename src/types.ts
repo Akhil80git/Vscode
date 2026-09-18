@@ -80,3 +80,20 @@ export interface SearchResult {
     matchLength: number;
   }[];
 }
+
+export interface Project {
+  id: string;
+  name: string;
+  createdAt: string;
+  updatedAt: string;
+  files: FileItem[];
+  openTabs: TabItem[];
+  activeTabPath: string | null;
+  gitState?: {
+    currentBranch: string;
+    branches: string[];
+    commits: GitCommit[];
+    repoUrl?: string;
+  };
+}
+

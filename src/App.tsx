@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
   FileItem,
   TabItem,
@@ -9,8 +9,8 @@ import {
   EditorSettings,
   Theme,
   GitCommit,
+  Project,
 } from './types';
-import { INITIAL_WORKSPACE_FILES } from './data/initialWorkspace';
 import {
   findFileByPath,
   updateFileInTree,
@@ -21,6 +21,16 @@ import {
 } from './utils/workspaceUtils';
 import { cloneGitHubRepository, fetchFileContent, parseGitHubUrl } from './utils/githubService';
 import { getAppThemeClasses } from './utils/monacoThemes';
+import {
+  loadAllProjects,
+  saveAllProjects,
+  saveProject,
+  createNewProject,
+  getActiveProjectId,
+  setActiveProjectId,
+  deleteProjectFromStorage,
+  renameProjectInStorage,
+} from './utils/storage';
 import { TitleBar } from './components/TitleBar';
 import { ActivityBar } from './components/ActivityBar';
 import { Sidebar } from './components/Sidebar';
@@ -29,17 +39,33 @@ import { BottomPanel } from './components/BottomPanel';
 import { StatusBar } from './components/StatusBar';
 import { CommandPalette, CommandItem } from './components/CommandPalette';
 import { GitHubCloneModal } from './components/GitHubCloneModal';
+import { ProjectModal } from './components/ProjectModal';
 
 export default function App() {
-  // Workspace files tree
-  const [files, setFiles] = useState<FileItem[]>(INITIAL_WORKSPACE_FILES);
+  // Load saved projects from LocalStorage
+  const [projects, setProjects] = useState<Project[]>(() => loadAllProjects());
+  const [activeProjectId, setActiveId] = useState<string>(() => {
+    const savedId = getActiveProjectId();
+    const existing = loadAllProjects();
+    if (savedId && existing.some((p) => p.id === savedId)) {
+      return savedId;
+    }
+    return existing[0]?.id || '';
+  });
 
-  // Tabs
-  const [openTabs, setOpenTabs] = useState<TabItem[]>([
-    { id: 'README.md', path: 'README.md', name: 'README.md', language: 'markdown' },
-    { id: 'src/App.tsx', path: 'src/App.tsx', name: 'App.tsx', language: 'typescript' },
-  ]);
-  const [activeTabPath, setActiveTabPath] = useState<string | null>('README.md');
+  // Active Project object
+  const currentProject = useMemo(() => {
+    return projects.find((p) => p.id === activeProjectId) || projects[0];
+  }, [projects, activeProjectId]);
+
+  // Workspace files tree (from active project)
+  const [files, setFiles] = useState<FileItem[]>(() => currentProject?.files || []);
+
+  // Tabs (from active project)
+  const [openTabs, setOpenTabs] = useState<TabItem[]>(() => currentProject?.openTabs || []);
+  const [activeTabPath, setActiveTabPath] = useState<string | null>(
+    () => currentProject?.activeTabPath || (currentProject?.files?.[0]?.path ?? null)
+  );
 
   // Sidebar & Views
   const [activeView, setActiveView] = useState<ActiveView>('explorer');
@@ -53,23 +79,23 @@ export default function App() {
     {
       id: 'init-1',
       type: 'system',
-      text: 'Visual Studio Code [Web Studio with Monaco Editor]',
+      text: 'Visual Studio Code Web [Clean Multi-Project Workspace]',
       timestamp: new Date().toLocaleTimeString(),
     },
     {
       id: 'init-2',
       type: 'output',
-      text: '🐙 GitHub Integration ready: type "git clone <url>" or click "Clone Repo" in topbar.',
+      text: `✓ Active project: "${currentProject?.name}". All changes auto-saved in LocalStorage.`,
       timestamp: new Date().toLocaleTimeString(),
     },
   ]);
 
   // Git state
   const [gitState, setGitState] = useState<GitState>({
-    repoName: 'my-awesome-app',
-    repoUrl: 'https://github.com/example/my-awesome-app',
+    repoName: currentProject?.name || 'my-project',
+    repoUrl: '',
     currentBranch: 'main',
-    branches: ['main', 'feature/new-ui'],
+    branches: ['main'],
     stagedFiles: [],
     unstagedFiles: [],
     isCloning: false,
@@ -78,11 +104,11 @@ export default function App() {
     commits: [
       {
         id: 'c-1',
-        hash: 'a7b3c29',
-        message: 'Initial commit: React 19 + TypeScript + Monaco Editor template',
-        author: 'akhil-coder',
+        hash: 'a1b2c3d',
+        message: `Initial commit for project: ${currentProject?.name}`,
+        author: 'developer',
         date: 'Just now',
-        filesCount: 6,
+        filesCount: currentProject?.files?.length || 0,
       },
     ],
   });
@@ -106,6 +132,7 @@ export default function App() {
   // Modals & Diff & Preview
   const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false);
   const [isGitHubCloneModalOpen, setIsGitHubCloneModalOpen] = useState(false);
+  const [isProjectModalOpen, setIsProjectModalOpen] = useState(false);
   const [isDiffOpen, setIsDiffOpen] = useState(false);
   const [diffFile, setDiffFile] = useState<FileItem | null>(null);
   const [isPreviewOpen, setIsPreviewOpen] = useState(false);
@@ -118,13 +145,90 @@ export default function App() {
     return findFileByPath(files, activeTabPath);
   }, [files, activeTabPath]);
 
+  // AUTO-SAVE to LocalStorage whenever active project state updates
+  useEffect(() => {
+    if (!currentProject) return;
+
+    const updated: Project = {
+      ...currentProject,
+      files,
+      openTabs,
+      activeTabPath,
+      updatedAt: new Date().toISOString(),
+    };
+
+    saveProject(updated);
+
+    // Update in-memory projects list
+    setProjects((prev) => prev.map((p) => (p.id === updated.id ? updated : p)));
+  }, [files, openTabs, activeTabPath]);
+
+  // Switch Active Project handler
+  const handleSelectProject = useCallback((id: string) => {
+    const target = projects.find((p) => p.id === id);
+    if (!target) return;
+
+    setActiveId(id);
+    setActiveProjectId(id);
+    setFiles(target.files);
+    setOpenTabs(target.openTabs);
+    setActiveTabPath(target.activeTabPath || (target.files[0]?.path ?? null));
+    setIsDiffOpen(false);
+
+    setGitState((prev) => ({
+      ...prev,
+      repoName: target.name,
+      currentBranch: target.gitState?.currentBranch || 'main',
+      branches: target.gitState?.branches || ['main'],
+      commits: target.gitState?.commits || [],
+      stagedFiles: [],
+      unstagedFiles: [],
+    }));
+
+    setTerminalLines((prev) => [
+      ...prev,
+      {
+        id: `switch-${Date.now()}`,
+        type: 'system',
+        text: `Switched workspace to project "${target.name}" (${target.files.length} items loaded from LocalStorage).`,
+        timestamp: new Date().toLocaleTimeString(),
+      },
+    ]);
+  }, [projects]);
+
+  // Create New Project
+  const handleCreateProject = (name: string, template: 'blank' | 'web') => {
+    const newProj = createNewProject(name, template);
+    const updatedList = [...projects, newProj];
+    setProjects(updatedList);
+    saveAllProjects(updatedList);
+    handleSelectProject(newProj.id);
+  };
+
+  // Rename Project
+  const handleRenameProject = (id: string, newName: string) => {
+    const updated = renameProjectInStorage(id, newName);
+    setProjects(updated);
+    if (activeProjectId === id) {
+      setGitState((prev) => ({ ...prev, repoName: newName }));
+    }
+  };
+
+  // Delete Project
+  const handleDeleteProject = (id: string) => {
+    const remaining = deleteProjectFromStorage(id);
+    setProjects(remaining);
+    if (activeProjectId === id && remaining.length > 0) {
+      handleSelectProject(remaining[0].id);
+    }
+  };
+
   // Modified files for Git tracking
   const modifiedFiles = useMemo(() => {
     const list: FileItem[] = [];
     function scan(items: FileItem[]) {
       for (const item of items) {
         if (item.type === 'file') {
-          // File is modified if content != originalContent
           if (item.isModified || (item.originalContent !== undefined && item.content !== item.originalContent)) {
             list.push(item);
           }
@@ -136,10 +240,10 @@ export default function App() {
     return list;
   }, [files]);
 
-  // Open file handler (handles on-demand fetching for cloned repos!)
+  // Open file handler
   const handleOpenFile = useCallback(
     async (file: FileItem) => {
-      // If file isn't loaded yet from GitHub, load it on demand
+      // If cloned from GitHub and not loaded yet, fetch on demand
       if (!file.isLoaded && file.path && gitState.owner) {
         try {
           const content = await fetchFileContent(
@@ -162,7 +266,7 @@ export default function App() {
         }
       }
 
-      // Add to open tabs if not present
+      // Add to open tabs if not already present
       setOpenTabs((prev) => {
         if (!prev.some((t) => t.path === file.path)) {
           return [
@@ -218,7 +322,6 @@ export default function App() {
       })
     );
 
-    // Update tab dirty indicator
     setOpenTabs((prev) =>
       prev.map((t) => (t.path === activeTabPath ? { ...t, isModified: true } : t))
     );
@@ -284,13 +387,13 @@ export default function App() {
       {
         id: `save-${Date.now()}`,
         type: 'output',
-        text: `[File System] Saved: ${activeTabPath}`,
+        text: `[File System] Saved: ${activeTabPath} (Saved to LocalStorage)`,
         timestamp: new Date().toLocaleTimeString(),
       },
     ]);
   };
 
-  // Format Code (simulate Prettier action)
+  // Format Code (Prettier)
   const handleFormatCode = () => {
     if (!activeFile || !activeFile.content) return;
     try {
@@ -298,7 +401,6 @@ export default function App() {
         const formatted = JSON.stringify(JSON.parse(activeFile.content), null, settings.tabSize);
         handleContentChange(formatted);
       } else {
-        // Normal trim formatting
         const lines = activeFile.content.split('\n').map((l) => l.trimEnd()).join('\n');
         handleContentChange(lines);
       }
@@ -316,7 +418,7 @@ export default function App() {
     }
   };
 
-  // Git actions
+  // Git staging & commits
   const handleStageFile = (path: string) => {
     setGitState((prev) => ({
       ...prev,
@@ -366,7 +468,6 @@ export default function App() {
 
     if (committedPaths.length === 0) return;
 
-    // Reset originalContent to current content for committed files
     setFiles((prev) => {
       let updated = prev;
       for (const path of committedPaths) {
@@ -383,7 +484,7 @@ export default function App() {
       id: `commit-${Date.now()}`,
       hash: Math.random().toString(16).substring(2, 9),
       message,
-      author: 'akhil-coder',
+      author: 'developer',
       date: 'Just now',
       filesCount: committedPaths.length,
     };
@@ -399,7 +500,7 @@ export default function App() {
       {
         id: `commit-${Date.now()}`,
         type: 'success',
-        text: `[${gitState.currentBranch} ${newCommit.hash}] ${message} (${committedPaths.length} files changed)`,
+        text: `[${gitState.currentBranch} ${newCommit.hash}] ${message} (${committedPaths.length} files committed)`,
         timestamp: new Date().toLocaleTimeString(),
       },
     ]);
@@ -434,7 +535,42 @@ export default function App() {
         }
       );
 
+      // Create a dedicated project for the cloned repo
+      const clonedProject: Project = {
+        id: `proj-github-${Date.now()}`,
+        name: parsed.repo,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        files: res.files,
+        openTabs: [],
+        activeTabPath: null,
+      };
+
+      const firstFile = res.files.find((f) => f.type === 'file') ||
+        res.files.find((f) => f.children && f.children.length > 0)?.children?.[0];
+
+      if (firstFile) {
+        clonedProject.openTabs = [
+          {
+            id: firstFile.path,
+            path: firstFile.path,
+            name: firstFile.name,
+            language: firstFile.language || 'plaintext',
+          },
+        ];
+        clonedProject.activeTabPath = firstFile.path;
+      }
+
+      const updatedProjects = [...projects, clonedProject];
+      setProjects(updatedProjects);
+      saveAllProjects(updatedProjects);
+
+      setActiveId(clonedProject.id);
+      setActiveProjectId(clonedProject.id);
       setFiles(res.files);
+      setOpenTabs(clonedProject.openTabs);
+      setActiveTabPath(clonedProject.activeTabPath);
+
       setGitState((prev) => ({
         ...prev,
         repoName: parsed.repo,
@@ -458,31 +594,12 @@ export default function App() {
         ],
       }));
 
-      // Find first file (like README.md or package.json) to open
-      const firstFile = res.files.find((f) => f.type === 'file') ||
-        res.files.find((f) => f.children && f.children.length > 0)?.children?.[0];
-
-      if (firstFile) {
-        setOpenTabs([
-          {
-            id: firstFile.path,
-            path: firstFile.path,
-            name: firstFile.name,
-            language: firstFile.language || 'plaintext',
-          },
-        ]);
-        setActiveTabPath(firstFile.path);
-      } else {
-        setOpenTabs([]);
-        setActiveTabPath(null);
-      }
-
       setTerminalLines((prev) => [
         ...prev,
         {
           id: `clone-success-${Date.now()}`,
           type: 'success',
-          text: `✓ Cloned https://github.com/${parsed.owner}/${parsed.repo} [${res.defaultBranch}] into workspace with ${res.files.length} items.`,
+          text: `✓ Cloned https://github.com/${parsed.owner}/${parsed.repo} into project "${parsed.repo}" with ${res.files.length} items. Saved in LocalStorage.`,
           timestamp: new Date().toLocaleTimeString(),
         },
       ]);
@@ -496,13 +613,12 @@ export default function App() {
     }
   };
 
-  // Terminal command executor
+  // Terminal commands
   const handleExecuteCommand = async (rawCmd: string) => {
     const cmd = rawCmd.trim();
     const args = cmd.split(' ');
     const root = args[0].toLowerCase();
 
-    // Echo input line
     setTerminalLines((prev) => [
       ...prev,
       {
@@ -525,18 +641,16 @@ export default function App() {
           id: `help-${Date.now()}`,
           type: 'output',
           text: `Available commands:
-  • git clone <url|owner/repo>   : Clone any repository from GitHub
+  • git clone <url|owner/repo>   : Clone repository from GitHub
   • git status                  : Show working tree and modified files
-  • git commit -m "<message>"   : Commit staged/modified changes
+  • git commit -m "<message>"   : Commit changes to local Git
   • git branch                  : List branches
   • git checkout <branch>       : Switch branch
-  • npm run dev / npm start     : Simulate running dev server
-  • npm test                    : Run workspace unit tests
-  • node <filename>             : Execute JavaScript/TypeScript
-  • ls / dir                    : List files in root directory
-  • cat <filename>              : Print file content to terminal
-  • mkdir <folder>              : Create a new folder
+  • npm run dev / npm start     : Start Live Preview server
+  • ls / dir                    : List files in project
+  • cat <filename>              : Print file content
   • touch <filename>            : Create a new file
+  • mkdir <folder>              : Create a new directory
   • clear                       : Clear terminal buffer`,
           timestamp: new Date().toLocaleTimeString(),
         },
@@ -544,7 +658,6 @@ export default function App() {
       return;
     }
 
-    // GIT commands
     if (root === 'git') {
       const sub = args[1]?.toLowerCase();
       if (sub === 'status') {
@@ -567,48 +680,6 @@ ${
         return;
       }
 
-      if (sub === 'branch') {
-        const text = gitState.branches
-          .map((b) => (b === gitState.currentBranch ? `* \x1b[32m${b}\x1b[0m` : `  ${b}`))
-          .join('\n');
-        setTerminalLines((prev) => [
-          ...prev,
-          {
-            id: `branch-${Date.now()}`,
-            type: 'output',
-            text,
-            timestamp: new Date().toLocaleTimeString(),
-          },
-        ]);
-        return;
-      }
-
-      if (sub === 'checkout') {
-        const target = args[2];
-        if (!target) {
-          setTerminalLines((prev) => [
-            ...prev,
-            { id: `err-${Date.now()}`, type: 'error', text: 'fatal: specify a branch name', timestamp: '' },
-          ]);
-          return;
-        }
-        setGitState((prev) => ({
-          ...prev,
-          currentBranch: target,
-          branches: prev.branches.includes(target) ? prev.branches : [...prev.branches, target],
-        }));
-        setTerminalLines((prev) => [
-          ...prev,
-          {
-            id: `co-${Date.now()}`,
-            type: 'success',
-            text: `Switched to branch '${target}'`,
-            timestamp: new Date().toLocaleTimeString(),
-          },
-        ]);
-        return;
-      }
-
       if (sub === 'clone') {
         const repo = args[2];
         if (!repo) {
@@ -618,11 +689,6 @@ ${
           ]);
           return;
         }
-
-        setTerminalLines((prev) => [
-          ...prev,
-          { id: `cloning-${Date.now()}`, type: 'system', text: `Cloning into '${repo}'...`, timestamp: '' },
-        ]);
 
         try {
           await handleCloneRepo(repo);
@@ -648,39 +714,24 @@ ${
       }
     }
 
-    // NPM commands
-    if (root === 'npm') {
-      if (args[1] === 'run' && (args[2] === 'dev' || args[2] === 'start')) {
-        setTerminalLines((prev) => [
-          ...prev,
-          {
-            id: `npm-${Date.now()}`,
-            type: 'system',
-            text: `> vite --host 0.0.0.0 --port 3000\n\n  VITE v5.2.0  ready in 180 ms\n\n  ➜  Local:   http://localhost:3000/\n  ➜  Network: use --host to expose`,
-            timestamp: new Date().toLocaleTimeString(),
-          },
-        ]);
-        setIsPreviewOpen(true);
-        return;
-      }
-
-      if (args[1] === 'test') {
-        setTerminalLines((prev) => [
-          ...prev,
-          {
-            id: `test-${Date.now()}`,
-            type: 'success',
-            text: `✓ test/math.test.ts (2 tests passed)\n✓ test/app.test.ts (1 test passed)\n\nTest Files  2 passed (2)\n     Tests  3 passed (3)\n  Duration  412ms`,
-            timestamp: new Date().toLocaleTimeString(),
-          },
-        ]);
-        return;
-      }
+    if (root === 'npm' && (args[1] === 'run' || args[1] === 'start')) {
+      setIsPreviewOpen(true);
+      setTerminalLines((prev) => [
+        ...prev,
+        {
+          id: `npm-${Date.now()}`,
+          type: 'success',
+          text: `[Live Server] Server running at http://localhost:5500/index.html (Live Preview opened)`,
+          timestamp: new Date().toLocaleTimeString(),
+        },
+      ]);
+      return;
     }
 
-    // File commands
     if (root === 'ls' || root === 'dir') {
-      const names = files.map((f) => (f.type === 'folder' ? `${f.name}/` : f.name)).join('   ');
+      const names = files.length === 0
+        ? '(Empty project)'
+        : files.map((f) => (f.type === 'folder' ? `${f.name}/` : f.name)).join('   ');
       setTerminalLines((prev) => [
         ...prev,
         { id: `ls-${Date.now()}`, type: 'output', text: names, timestamp: '' },
@@ -729,7 +780,6 @@ ${
       return;
     }
 
-    // Default unknown command
     setTerminalLines((prev) => [
       ...prev,
       {
@@ -744,27 +794,22 @@ ${
   // Keyboard Shortcuts Listener
   useEffect(() => {
     const handleGlobalKeyDown = (e: KeyboardEvent) => {
-      // Ctrl+P / Cmd+P
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'p' && !e.shiftKey) {
         e.preventDefault();
         setIsCommandPaletteOpen(true);
       }
-      // Ctrl+Shift+P / Cmd+Shift+P
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'p' && e.shiftKey) {
         e.preventDefault();
         setIsCommandPaletteOpen(true);
       }
-      // Ctrl+B (Toggle Sidebar)
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'b') {
         e.preventDefault();
         setIsSidebarOpen((prev) => !prev);
       }
-      // Ctrl+J or Ctrl+` (Toggle Terminal)
       if ((e.ctrlKey || e.metaKey) && (e.key.toLowerCase() === 'j' || e.key === '`')) {
         e.preventDefault();
         setIsBottomPanelOpen((prev) => !prev);
       }
-      // Ctrl+S (Save)
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 's') {
         e.preventDefault();
         handleSaveFile();
@@ -778,11 +823,23 @@ ${
   // Command palette commands
   const commandPaletteList: CommandItem[] = [
     {
+      id: 'open-projects',
+      title: 'Projects: Switch / Manage Projects (Saved in LocalStorage)',
+      category: 'Projects',
+      action: () => setIsProjectModalOpen(true),
+    },
+    {
       id: 'clone-github',
       title: 'Git: Clone Repository from GitHub',
       category: 'GitHub',
       shortcut: 'Ctrl+Shift+G',
       action: () => setIsGitHubCloneModalOpen(true),
+    },
+    {
+      id: 'toggle-preview',
+      title: 'View: Toggle Live Server Preview (Split / Full)',
+      category: 'View',
+      action: () => setIsPreviewOpen((prev) => !prev),
     },
     {
       id: 'theme-dark',
@@ -795,24 +852,6 @@ ${
       title: 'Preferences: Color Theme (Light+)',
       category: 'Preferences',
       action: () => setSettings((s) => ({ ...s, theme: 'vs-light' })),
-    },
-    {
-      id: 'theme-github',
-      title: 'Preferences: Color Theme (GitHub Dark)',
-      category: 'Preferences',
-      action: () => setSettings((s) => ({ ...s, theme: 'github-dark' })),
-    },
-    {
-      id: 'theme-dracula',
-      title: 'Preferences: Color Theme (Dracula)',
-      category: 'Preferences',
-      action: () => setSettings((s) => ({ ...s, theme: 'dracula' })),
-    },
-    {
-      id: 'theme-monokai',
-      title: 'Preferences: Color Theme (Monokai)',
-      category: 'Preferences',
-      action: () => setSettings((s) => ({ ...s, theme: 'monokai' })),
     },
     {
       id: 'format-doc',
@@ -829,36 +868,26 @@ ${
       action: () => setIsBottomPanelOpen((prev) => !prev),
     },
     {
-      id: 'toggle-preview',
-      title: 'View: Toggle Web Live Preview',
-      category: 'View',
-      action: () => setIsPreviewOpen((prev) => !prev),
-    },
-    {
-      id: 'toggle-minimap',
-      title: 'View: Toggle Minimap',
-      category: 'View',
-      action: () => setSettings((s) => ({ ...s, minimap: !s.minimap })),
-    },
-    {
       id: 'export-zip',
-      title: 'File: Download Workspace as ZIP',
+      title: 'File: Download Project as ZIP',
       category: 'File',
-      action: () => exportWorkspaceAsZip(files, gitState.repoName),
+      action: () => exportWorkspaceAsZip(files, currentProject?.name || 'my-project'),
     },
   ];
 
   return (
     <div className={`h-screen w-screen flex flex-col overflow-hidden font-sans ${themeClasses.bgApp}`}>
-      {/* Top Title Bar */}
+      {/* Top Title Bar with Projects Button */}
       <TitleBar
+        projectName={currentProject?.name || 'My Project'}
         repoName={gitState.repoName}
         currentBranch={gitState.currentBranch}
         theme={settings.theme}
         onSelectTheme={(t) => setSettings((s) => ({ ...s, theme: t }))}
         onOpenCommandPalette={() => setIsCommandPaletteOpen(true)}
         onOpenGitHubModal={() => setIsGitHubCloneModalOpen(true)}
-        onExportZip={() => exportWorkspaceAsZip(files, gitState.repoName)}
+        onOpenProjectModal={() => setIsProjectModalOpen(true)}
+        onExportZip={() => exportWorkspaceAsZip(files, currentProject?.name || 'my-project')}
         onToggleSidebar={() => setIsSidebarOpen(!isSidebarOpen)}
         onToggleBottomPanel={() => setIsBottomPanelOpen(!isBottomPanelOpen)}
         onTogglePreview={() => setIsPreviewOpen(!isPreviewOpen)}
@@ -872,14 +901,14 @@ ${
         isPreviewOpen={isPreviewOpen}
         isDiffOpen={isDiffOpen}
         activeFilePath={activeTabPath ?? undefined}
-        onNewFile={() => handleCreateFile(null, 'untitled.ts')}
+        onNewFile={() => handleCreateFile(null, 'untitled.txt')}
         onNewFolder={() => handleCreateFolder(null, 'new-folder')}
         onSaveFile={handleSaveFile}
         onFormatCode={handleFormatCode}
         themeClasses={themeClasses}
       />
 
-      {/* Main Workspace (Activity Bar + Sidebar + Editor + Bottom Panel) */}
+      {/* Main Workspace (Activity Bar + Sidebar + Editor Area) */}
       <div className="flex-1 flex min-h-0 overflow-hidden relative">
         {/* Left Activity Bar */}
         <ActivityBar
@@ -897,7 +926,7 @@ ${
           isOpen={isSidebarOpen}
           width={sidebarWidth}
           files={files}
-          repoName={gitState.repoName}
+          repoName={currentProject?.name || 'my-project'}
           activeFilePath={activeTabPath ?? undefined}
           gitState={gitState}
           modifiedFiles={modifiedFiles}
@@ -909,7 +938,7 @@ ${
           onCreateFolder={handleCreateFolder}
           onDeleteFile={handleDeleteFile}
           onRenameFile={handleRenameFile}
-          onExportZip={() => exportWorkspaceAsZip(files, gitState.repoName)}
+          onExportZip={() => exportWorkspaceAsZip(files, currentProject?.name || 'my-project')}
           onCommit={handleCommit}
           onOpenDiff={handleOpenDiff}
           onDiscardChange={handleDiscardChange}
@@ -930,6 +959,7 @@ ${
             openTabs={openTabs}
             activeTabPath={activeTabPath}
             activeFile={activeFile}
+            files={files}
             settings={settings}
             isDiffOpen={isDiffOpen}
             diffFile={diffFile}
@@ -958,7 +988,7 @@ ${
             onClearTerminal={() => setTerminalLines([])}
             commits={gitState.commits}
             currentBranch={gitState.currentBranch}
-            repoName={gitState.repoName}
+            repoName={currentProject?.name || 'my-project'}
             themeClasses={themeClasses}
           />
         </div>
@@ -1001,6 +1031,20 @@ ${
         gitState={gitState}
         onCloneRepo={handleCloneRepo}
         onSetGitHubToken={(tok) => setGitState((prev) => ({ ...prev, githubToken: tok }))}
+        themeClasses={themeClasses}
+      />
+
+      {/* Projects Manager Modal */}
+      <ProjectModal
+        isOpen={isProjectModalOpen}
+        onClose={() => setIsProjectModalOpen(false)}
+        projects={projects}
+        activeProjectId={activeProjectId}
+        onSelectProject={handleSelectProject}
+        onCreateProject={handleCreateProject}
+        onRenameProject={handleRenameProject}
+        onDeleteProject={handleDeleteProject}
+        onExportProjectZip={(proj) => exportWorkspaceAsZip(proj.files, proj.name)}
         themeClasses={themeClasses}
       />
     </div>

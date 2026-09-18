@@ -15,12 +15,14 @@ import {
 import { Theme } from '../types';
 
 interface TitleBarProps {
+  projectName: string;
   repoName: string;
   currentBranch: string;
   theme: Theme;
   onSelectTheme: (t: Theme) => void;
   onOpenCommandPalette: () => void;
   onOpenGitHubModal: () => void;
+  onOpenProjectModal: () => void;
   onExportZip: () => void;
   onToggleSidebar: () => void;
   onToggleBottomPanel: () => void;
@@ -37,12 +39,14 @@ interface TitleBarProps {
 }
 
 export const TitleBar: React.FC<TitleBarProps> = ({
+  projectName,
   repoName,
   currentBranch,
   theme,
   onSelectTheme,
   onOpenCommandPalette,
   onOpenGitHubModal,
+  onOpenProjectModal,
   onExportZip,
   onToggleSidebar,
   onToggleBottomPanel,
@@ -72,6 +76,7 @@ export const TitleBar: React.FC<TitleBarProps> = ({
 
   const menus: Record<string, { label: string; action: () => void; shortcut?: string; divider?: boolean }[]> = {
     File: [
+      { label: 'Switch / Manage Projects...', action: onOpenProjectModal },
       { label: 'New File', action: onNewFile, shortcut: 'Ctrl+N' },
       { label: 'New Folder', action: onNewFolder },
       { label: 'Save', action: onSaveFile, shortcut: 'Ctrl+S' },
@@ -165,7 +170,7 @@ export const TitleBar: React.FC<TitleBarProps> = ({
           <div className="flex items-center gap-2 truncate">
             <Search className="w-3.5 h-3.5 shrink-0 opacity-70" />
             <span className="truncate">
-              {repoName} {activeFilePath ? `- ${activeFilePath.split('/').pop()}` : ''}
+              {projectName} {activeFilePath ? `- ${activeFilePath.split('/').pop()}` : ''}
             </span>
           </div>
           <kbd className="hidden md:inline-flex items-center px-1.5 py-0.5 text-[10px] font-mono rounded bg-white/10 border border-white/10">
@@ -176,33 +181,44 @@ export const TitleBar: React.FC<TitleBarProps> = ({
 
       {/* Right: Actions */}
       <div className="flex items-center gap-1 shrink-0">
-        {/* Branch indicator */}
-        <div className="hidden lg:flex items-center gap-1.5 px-2 py-0.5 rounded bg-white/5 border border-white/10 text-[11px] text-slate-300">
-          <FolderGit2 className="w-3 h-3 text-sky-400" />
-          <span className="truncate max-w-[120px] font-mono">{currentBranch}</span>
-        </div>
+        {/* Prominent Projects Button */}
+        <button
+          id="btn-topbar-projects"
+          onClick={onOpenProjectModal}
+          className="flex items-center gap-1.5 px-2.5 py-1 rounded bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 hover:text-amber-200 border border-amber-500/40 transition-colors font-medium text-xs cursor-pointer shadow-xs"
+          title="Manage & Switch Projects (Saved in LocalStorage)"
+        >
+          <span className="text-amber-400">📁</span>
+          <span className="font-semibold truncate max-w-[110px] sm:max-w-[140px]">{projectName}</span>
+          <span className="text-[10px] bg-amber-400/20 px-1 py-0.2 rounded text-amber-200 hidden md:inline">
+            Projects
+          </span>
+        </button>
 
         {/* GitHub Clone Button */}
         <button
           id="btn-github-clone"
           onClick={onOpenGitHubModal}
-          className="flex items-center gap-1.5 px-2.5 py-1 rounded bg-blue-600/20 hover:bg-blue-600/30 text-blue-400 hover:text-blue-300 border border-blue-500/30 transition-colors font-medium text-xs cursor-pointer"
+          className="flex items-center gap-1.5 px-2 py-1 rounded bg-blue-600/20 hover:bg-blue-600/30 text-blue-400 hover:text-blue-300 border border-blue-500/30 transition-colors font-medium text-xs cursor-pointer"
           title="Clone any GitHub Repository"
         >
           <Github className="w-3.5 h-3.5 shrink-0" />
-          <span className="hidden sm:inline">Clone Repo</span>
+          <span className="hidden xl:inline">GitHub</span>
         </button>
 
-        {/* Live Web Preview */}
+        {/* Live Web Preview Button */}
         <button
           id="btn-toggle-preview"
           onClick={onTogglePreview}
-          className={`p-1.5 rounded hover:bg-white/10 ${
-            isPreviewOpen ? 'text-emerald-400 bg-emerald-500/10' : themeClasses.textSecondary
-          } transition-colors`}
-          title="Run / Preview Web Output"
+          className={`flex items-center gap-1 px-2 py-1 rounded border transition-colors cursor-pointer text-xs ${
+            isPreviewOpen
+              ? 'text-emerald-300 bg-emerald-500/20 border-emerald-500/40'
+              : 'hover:bg-white/10 border-transparent ' + themeClasses.textSecondary
+          }`}
+          title="VS Code Live Server Preview"
         >
-          <Play className="w-3.5 h-3.5" />
+          <Play className="w-3.5 h-3.5 text-emerald-400" />
+          <span className="hidden sm:inline font-medium">Live Preview</span>
         </button>
 
         {/* Split Diff */}

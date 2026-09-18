@@ -210,10 +210,12 @@ export const FileExplorerView: React.FC<FileExplorerViewProps> = ({
   return (
     <div id="file-explorer-panel" className="h-full flex flex-col select-none overflow-hidden">
       {/* Explorer Header */}
-      <div className={`px-3 py-2 flex items-center justify-between border-b ${themeClasses.border} shrink-0`}>
-        <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 truncate">
-          {repoName || 'Explorer'}
-        </span>
+      <div className={`px-3 py-2 flex items-center justify-between border-b ${themeClasses.border} shrink-0 bg-black/10`}>
+        <div className="flex items-center gap-1.5 truncate">
+          <span className="text-[11px] font-bold uppercase tracking-wider text-slate-300 truncate">
+            {repoName || 'Explorer'}
+          </span>
+        </div>
         <div className="flex items-center gap-1 text-slate-400">
           <button
             id="explorer-new-file-btn"
@@ -222,7 +224,7 @@ export const FileExplorerView: React.FC<FileExplorerViewProps> = ({
               setNewItemName('');
             }}
             className="p-1 hover:text-white hover:bg-white/10 rounded transition-colors"
-            title="New File"
+            title="New File in Project Root"
           >
             <FilePlus className="w-3.5 h-3.5" />
           </button>
@@ -233,7 +235,7 @@ export const FileExplorerView: React.FC<FileExplorerViewProps> = ({
               setNewItemName('');
             }}
             className="p-1 hover:text-white hover:bg-white/10 rounded transition-colors"
-            title="New Folder"
+            title="New Folder in Project Root"
           >
             <FolderPlus className="w-3.5 h-3.5" />
           </button>
@@ -250,7 +252,7 @@ export const FileExplorerView: React.FC<FileExplorerViewProps> = ({
 
       {/* Root creation input */}
       {isCreating && isCreating.parentPath === null && (
-        <form onSubmit={handleCreateSubmit} className="py-1 px-3 flex items-center gap-1.5 shrink-0 bg-white/5">
+        <form onSubmit={handleCreateSubmit} className="py-1 px-3 flex items-center gap-1.5 shrink-0 bg-white/5 border-b border-blue-500/40">
           {isCreating.type === 'folder' ? (
             <ChevronRight className="w-3.5 h-3.5 text-slate-400 shrink-0" />
           ) : (
@@ -260,10 +262,12 @@ export const FileExplorerView: React.FC<FileExplorerViewProps> = ({
           <input
             type="text"
             autoFocus
-            placeholder={isCreating.type === 'file' ? 'filename.ts' : 'folder-name'}
+            placeholder={isCreating.type === 'file' ? 'index.html' : 'components'}
             value={newItemName}
             onChange={(e) => setNewItemName(e.target.value)}
-            onBlur={() => setIsCreating(null)}
+            onBlur={() => {
+              if (!newItemName.trim()) setIsCreating(null);
+            }}
             className="flex-1 bg-slate-800 text-white px-1.5 py-0.5 border border-blue-500 rounded outline-none text-xs"
           />
         </form>
@@ -272,14 +276,31 @@ export const FileExplorerView: React.FC<FileExplorerViewProps> = ({
       {/* Files Tree */}
       <div className="flex-1 overflow-y-auto py-1 scrollbar-thin">
         {files.length === 0 ? (
-          <div className="p-4 text-center text-slate-500 text-xs">
-            No files in workspace.
-            <div className="mt-2">
+          <div className="p-4 text-center text-slate-400 text-xs">
+            <p className="font-semibold text-slate-300 mb-1">Clean Project Workspace</p>
+            <p className="text-[11px] text-slate-500 mb-3 leading-relaxed">
+              No files yet in <span className="text-slate-300 font-mono font-medium">{repoName}</span>. Create files or folders below:
+            </p>
+            <div className="flex items-center justify-center gap-2">
               <button
-                onClick={() => setIsCreating({ parentPath: null, type: 'file' })}
-                className="px-2 py-1 bg-blue-600/20 text-blue-400 rounded text-xs hover:bg-blue-600/30"
+                onClick={() => {
+                  setIsCreating({ parentPath: null, type: 'file' });
+                  setNewItemName('');
+                }}
+                className="px-2.5 py-1 bg-blue-600 hover:bg-blue-500 text-white rounded text-xs transition-colors cursor-pointer flex items-center gap-1"
               >
-                Create File
+                <FilePlus className="w-3 h-3" />
+                <span>New File</span>
+              </button>
+              <button
+                onClick={() => {
+                  setIsCreating({ parentPath: null, type: 'folder' });
+                  setNewItemName('');
+                }}
+                className="px-2.5 py-1 bg-white/10 hover:bg-white/20 text-slate-200 rounded text-xs transition-colors cursor-pointer flex items-center gap-1"
+              >
+                <FolderPlus className="w-3 h-3" />
+                <span>New Folder</span>
               </button>
             </div>
           </div>
